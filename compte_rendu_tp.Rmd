@@ -1,0 +1,274 @@
+---
+title: "Gene Expression Prediction Challenge 3.0 (expred3.0)"
+subtitle: "sujet et compte rendu"
+author: "Chaimaa RIZKI - Florence PITTION BORDIGON - Bilel HEDDIA  - EL Hadrami N'DOYE - Ismaïl RAMDÉ - Team D"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r, echo=FALSE, eval=TRUE}
+knitr::opts_chunk$set(collapse=TRUE, comment = "#>", fig.width=9, fig.height=6, eval=TRUE, echo=FALSE, results="hide")
+``` 
+
+# Objectif
+
+1. On cherche à expliquer l’expression du gène ALS2 dans le jeu de données data_train,
+2. Pour rédire les valeurs d’expression du gène ALS2 dans le jeu de données data_test.
+
+# Statistiques descriptives
+
+**Le jeu de donnée `data_train`**
+
+```{r loading_data, echo=TRUE, results="verbatim"}
+data_train <- readRDS(file = "data_train.rds")
+data_test <- readRDS(file = "data_test.rds")
+head(data_train[,1:6])
+```
+
+**Distribution de l’expression de ALS2**
+
+```{r}
+plot(density(data_train$ALS2))
+```
+
+**Distribution du transcriptome dans `data_train`**
+
+```{r}
+plot(density(as.matrix(data_train[,4:1003])))
+```
+
+**Distribution du methylome dans `data_train`**
+
+Pas utilisé dans ce TP
+
+```{r}
+plot(density(as.matrix(data_train[,1004:2003])))
+```
+
+
+
+# Method 1 : SIS
+
+La method SIS [Shurely Independant Screening, Zhang HH. J R Stat Soc Series B Stat Methodol. 2008] appliquée au *transcriptome* (définir) consiste à réaliser autant de regressions linéaires simples qu’il y a de variables explicatives (gènes).
+
+*Critères*, pour chaque gène $g$ on calcule le $\beta_{g}$ et la p-valeur $pv_g$ associée. 
+
+*Selection de variables*, on selectionne sur le *volcano plot* les gènes qui ont les meilleurs scores, indépendamment les uns des autres.
+
+*Modèle*, on propose un modèle de regression linéaire multiple expliquant l’expression de ALS2.
+
+**Calcul des modèles indépendants**
+
+Pour chaque gènes calculer le $\beta_{gene}$ et la p-valeur associée au modèle $ALS2~gène$, on charactérisera aussi la distribution des résidus.
+
+```{r sis_compute_models}
+# Genes a étudier
+gs <- colnames(data_train)[5:1003]
+# creations des vecteurs nuls
+pval.shapiro <- c()
+pval.fisher <- c()
+beta <- c()
+
+# Regression lineaire multiple du gene "ALS2"(variable a exipliquer) en fonction des variables explicatives(gs)
+for(i in 1 : length(gs)){
+  g <- gs[i]
+  m <- lm(data_train[,"ALS2"]~data_train[,g])
+  res <- m$residuals
+  pval.shapiro <- c(pval.shapiro,shapiro.test(res)$p.value)
+  pval.fisher <- c(pval.fisher,anova(m)[1,5])
+  beta <- c(beta,m$coefficients[[2]])
+}
+```
+
+
+**Normalité**
+
+Afficher : 
+
+- en abscisse les $-log10(p-valeurs)$ des tests de Shapiro-Wilk sur les résidus de chacun des modèles indépendants,
+- en ordonée les $-log10(p-valeurs)$ des tests de Student (ou Fisher) associés.
+
+```{r sis_normalité}
+abs <- - log(pval.shapiro)
+ord <- -log(pval.fisher)
+plot(abs,ord,col="red",xlab = "pval.shapiro",ylab="pval.fisher",
+     main = "p-valeurs de fisher en fonction des pvaleurs de shapiro")
+```
+$\underline{\text{Observations et interprétations :}}$
+
+On constate que la majorité des points se concentrent autours de $5$ et le reste des points ont plutôt tendance a se diriger vers le haut et a droite.
+
+Cette tendance nous montre que les points concentrés autours de $5$ suivent une normalité.
+
+
+**Volcano plot**
+
+Afficher : 
+
+- en abscisse les $\beta_{gene}$ des modéles de régression simple pour chaque gène $g$,
+- en ordonée les $-log10(p-valeurs)$ des tests de Student (ou Fisher) associés.
+
+```{r sis_compute_volcano}
+abs <- beta
+ord <- -log(pval.fisher)
+plot(abs,ord,col="blue",xlab="beta",ylab="pval.fisher",
+     main="p-valeurs de fisher en fonction du beta")
+```
+
+
+$\underline{\text{Observations et interprétations:}}$
+
+Nous remarquons ici que, les points sont dispersés autours de l'origine avec une forte concentration au niveau des celle-ci.
+Cette distribution indique une corrélation négative des points avant l'origine suivie d'une corrélation positive.
+
+## Méthodologie:
+
+Avant d'appliquer la méthode de sélection des variables, nous commencerons d'abords par trier les p-valeurs obtenues a l'issue du test de fisher par ordre croissant associées a leurs gènes. Ensuite nous choisirons les n premiers gènes. Enfin nous appliquerons la sélection des variables sur ces n gènes.
+
+
+**Sélection de variables**
+
+La méthode choisie est stepAIC.
+
+Le critère AIC est défini par : 
+
+$$AIC = - 2 ln(\mathcal{L}) + 2p $$
+avec :
+
+ - $\mathcal{L}$ le maximum de la fonction de vraisemblance
+ - $n$ le nombre d’observations
+ - $p$ le nombre de paramètres
+ 
+La formulation analystique de notre modèle:
+
+$Y_{ALS2}=\beta_{0}+\beta_{1}X_{ARF5}+\dots+\beta_{k}X_{k}+\dots+\beta_{p}X_{IDH3G}+\epsilon$
+
+Où la variable expliquée $Y_{ALS2}$  est influencée de manière linéaire par les variables explicatives $X_{ARF5},X_{k}, \dots, X_{IDH3G}$. $\epsilon$ est l’erreur résiduelle,$\beta_{0}$ l’intercepte ou constante de régression et $\beta_{i}$ l’effet du ième gene sur la variable $Y_{ALS2}$.
+
+**Exemple de regression lineaire multiple**
+
+lm(ALS2~ARF5+CD38,data_train)
+
+
+Dans cette section on cherche a déterminer les gènes qui contribuent au plus a expliquer le gène "ALS2".
+
+```{r}
+names(pval.fisher) <- gs
+pval.trie <- sort(pval.fisher)
+head(pval.trie,10)
+pval <- head(pval.trie,50)
+plot(pval,col="red",main = "les 50 p-valeurs triées par ordre croissant")
+```
+
+Remarquons que les p-valeurs restent constantes de 0 jusqu’à 40. On peut donc choisir les dix premières pour appliquer une sélection. 
+
+**la methode stepAIC**
+
+```{r}
+sAIC <-step(lm(ALS2~RGS7BP+MFAP3+PRRC2C+VMO1+SCRN3+NRIP1+PCNX1+TMUB1+MYL6+NCOA2 ,data=data_train), method="bakward")
+```
+
+Donc les gènes qui expliquent le plus le gène "ALS2" sont:
+**RGS7BP,PRRC2C, VMO1, SCRN3, NRIP1 ,MYL6**
+
+**Matrice de scatterplot**
+
+```{r}
+library("quantable")
+data <- data.frame(data_train$ALS2,data_train$RGS7BP,data_train$PRRC2C,data_train$VMO1,data_train$SCRN3,data_train$NRIP1,data_train$MYL6) 
+pairs(data, pch = 1, lower.panel=panel.smooth, upper.panel=panel.cor,col = "blue", main = "Matrice de Scatter plot et test")
+```
+
+Cette matrice de corrélation confirme les différentes corrélations entre la a expliquer et les variables sélectionnées a partir de la méthode stepAIC. Cela se laisse voir au travers des formes allongées des nuages de points.
+
+
+```{r}
+m <- lm(ALS2~RGS7BP + PRRC2C + VMO1 + SCRN3 + NRIP1 + MYL6,data_train)
+```
+
+
+
+
+**Prédiction**
+
+```{r sis_pred}
+"RMSE" <- function(data_truth, data_pred) {
+    # Root Mean Square Error
+    return(sqrt(mean((data_truth - data_pred)^2)))
+}
+```
+
+1. Prédiction des valeurs de ALS2 du jeu de donnée `data_train`
+
+```{r}
+data_truth <- data_train$ALS2
+data_pred <- predict(m,data_train,type="response")
+(score <- RMSE(data_truth, data_pred))
+```
+
+2. Prédiction des valeurs de ALS2 du jeu de donnée `data_test`
+
+```{r}
+data_truth <- data_train$ALS2
+data_pred <- predict(m,data_test,type="response")
+(score <- RMSE(data_truth, data_pred))
+```
+3. Score obtenu sur codalab
+Le score obtenu sur codlab est de 0.20
+
+4. Comparaison
+
+Le score obtenu avec les données data_train est inférieur a celui obtenu avec les données data_set.
+
+
+# Method 2 : ACP
+
+
+```{r pca2, eval=TRUE}
+d = as.matrix(data_train[,1004:2003])
+pca = prcomp(d, scale=TRUE)
+
+v = pca$sdev * pca$sdev
+p = v / sum(v) * 100
+
+layout(matrix(1:6,2), respect=TRUE)
+# layout(matrix(1:2,1), respect=TRUE)
+barplot(p)
+
+# data_train$histo2 = as.factor(substr(data_train$histology, 1, 5))
+data_train$histo2 = data_train$histology
+for (i in 1:5) {
+  j = i+1
+  plot(pca$x[,i], pca$x[,j], xlab=paste0("PC", i, "(", signif(p[i], 3), "%)"), ylab=paste0("PC", j, "(", signif(p[j], 3), "%)"), pch=16, col=as.numeric(data_train[rownames(pca$x),]$histo2))
+  scale_factor = min(abs(c(min(c(pca$x[,i], pca$x[,j])), max(c(pca$x[,i], pca$x[,j])))))  
+  # scale_factor = min(abs(c(max(min(pca$x[,i]), min(pca$x[,j])), min(max(pca$x[,i]), max(pca$x[,j])))))
+  plotrix::draw.ellipse(0,0,scale_factor,scale_factor, lty=2, border="grey")
+  # arrows(0,0,pca$rotation[,i]*scale_factor, pca$rotation[,j]*scale_factor, col="grey")
+  # text(pca$rotation[,i]*scale_factor, pca$rotation[,j]*scale_factor, rownames(pca$rotation))
+}
+```
+
+```{r pairs, fig.height=9}
+pairs(pca$x[,1:8], pch=".", col=as.numeric(data_train[rownames(pca$x),]$histo2))
+```
+
+```{r hm, eval=FALSE}
+data = t(as.matrix(data_train[,0004:1003]))
+source("~/projects/epimedpipelines/results/commons.R")
+plot_expr_hm(data=data, normalization="zscore_rows",   colors=c("cyan", "cyan", "black", "red", "red"))
+```
+
+
+# Session Information
+
+```{r, results="verbatim"}
+sessionInfo()
+```
+
+
+
